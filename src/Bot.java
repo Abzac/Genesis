@@ -2,7 +2,9 @@ public class Bot {
 
     private static final int LV_ORGANIC_HOLD = 1;           // органика
     private static final int LV_ALIVE = 3;                  // живой бот
-    private static final int MIND_SIZE = 64;                // объем памяти генома
+    public static final int MIND_SIZE = 64;                // объем памяти генома
+    public static final int MEMORY_SIZE = 16;                // объем памяти бота
+    private static final int MEMORY_STATE_SIZE = 64;                // количество состояний ячейки памяти бота
 
     private static double[] randMemory = new double[1000000];   // массив предгенерированных случайных чисел
     private static int randIdx = 0;                             // указатель текущего случайного числа
@@ -14,6 +16,8 @@ public class Bot {
 
 
     byte[] mind = new byte[MIND_SIZE];               // геном бота
+    byte[] memory = new byte[MEMORY_SIZE];          // память бота
+    SimpleStack<CommandResult> last_actions = new SimpleStack<>(100); // послдение действия бота
 
     int adr;                 // указатель текущей команды
     int x;                   // координаты
@@ -28,10 +32,14 @@ public class Bot {
     int c_green;
     int c_blue;
     int c_family;            // цвет семьи бота в ARGB
+    boolean deleted = false;
 
     Bot prev;                // предыдущий в цепочке просчета
     Bot next;                // следующий в цепочке просчета
 
+    public boolean isAlive() {
+        return alive == LV_ALIVE;
+    }
 
     // ====================================================================
     // =========== главная функция жизнедеятельности бота  ================
@@ -39,8 +47,17 @@ public class Bot {
     void step() {
         int breakflag;
         int command;
+
+        // memory variables
+        int action;
+        int memory_address;
+        byte value;
+
         for (int cyc = 0; cyc < 15; cyc++) {
             command = mind[adr];        // текущая команда
+            CommandResult command_result = new CommandResult(command);
+            last_actions.add(command_result);
+
             breakflag = 0;
             switch (command) {
 
@@ -52,10 +69,65 @@ public class Bot {
                     breakflag = 1;     // выходим, так как команда завершающая
                     break;
 
+                case 6:
+                case 1: // читать память
+                    memory_address = botGetParam() % MEMORY_SIZE;
+                    command_result.arg1 = memory_address;
+                    botJumpAdr(memory[memory_address] + 1);
+                    break;
+
+                case 10:
+                case 2: // писать память
+                    memory_address = botGetParam() % MEMORY_SIZE;
+                    command_result.arg1 = memory_address;
+                    action = botGetParam(1);
+                    command_result.arg2 = (action % 11) + 1;
+                    value = (byte) (getActionValue(action) % MEMORY_STATE_SIZE);
+                    command_result.result = value;
+
+                    memory[memory_address] = value;
+                    botIncAdr(3);
+                    break;
+
+                case 8:
+                case 3: // увеличить память
+                    memory_address = botGetParam() % MEMORY_SIZE;
+                    command_result.arg1 = memory_address;
+                    memory[memory_address] = (byte) ((memory[memory_address] + 1) % MEMORY_STATE_SIZE);
+                    command_result.result = memory[memory_address];
+                    botIncAdr(2);
+                    break;
+
+                case 9:
+                case 4: // уменьшить память
+                    memory_address = botGetParam() % MEMORY_SIZE;
+                    command_result.arg1 = memory_address;
+                    memory[memory_address] = (byte) (Math.abs(memory[memory_address] - 1) % MEMORY_STATE_SIZE);
+                    command_result.result = memory[memory_address];
+                    botIncAdr(2);
+                    break;
+
+                case 7:
+                case 5: // условный переход
+                    memory_address = botGetParam() % MEMORY_SIZE;
+                    command_result.arg1 = memory_address;
+                    int memory_threshold = botGetParam(1) % MEMORY_STATE_SIZE;
+                    command_result.arg2 = memory_threshold;
+
+                    if (memory[memory_address] >= memory_threshold) {
+                        botJumpAdr(3);
+                        command_result.result = 1;
+                    } else {
+                        botJumpAdr(4);
+                        command_result.result = 2;
+                    }
+
+                    break;
+
 //*******************************************************************
 //............... размножение делением ..............................
                 case 16:
-                    botDouble();
+                    command_result.result = botDouble();
                     botIncAdr(1);
                     breakflag = 1;
                     break;
@@ -64,13 +136,16 @@ public class Bot {
 //*******************************************************************
 //...............  повернуть с параметром   .........................
                 case 23:
-                    botRotate();
+                    command_result.arg1 = botGetParam() % 8;
+                    command_result.result = botRotate();
                     botIncAdr(2);
                     break;
 //*******************************************************************
 //...............  шаг с параметром  ................................
                 case 26:
-                    botJumpAdr(botMove()); // смещаем УТК на значение клетки (botMove(): 2-пусто  3-стена  4-органика 5-бот 6-родня)
+                    command_result.arg1 = botGetParam() % 8;
+                    command_result.result = botMove();
+                    botJumpAdr(command_result.result); // смещаем УТК на значение клетки (botMove(): 2-пусто  3-стена  4-органика 5-бот 6-родня)
                     breakflag = 1;
                     break;
 
@@ -78,21 +153,23 @@ public class Bot {
 //*******************************************************************
 //...............  фотосинтез .......................................
                 case 32:
-                    botEatSun();
+                    command_result.result = botEatSun();
                     botIncAdr(1);
                     breakflag = 1;
                     break;
 //*******************************************************************
 //............... хемосинтез (энерия из минералов) ..................
                 case 33:
-                    botMineral2Health();
+                    command_result.result = botMineral2Health();
                     botIncAdr(1);
                     breakflag = 1;
                     break;
 //************************************************************************
 //..............   съесть в относительном напралении       ...............
                 case 34:
-                    botJumpAdr(botEatBot()); // меняем адрес текущей команды
+                    command_result.arg1 = botGetParam() % 8;
+                    command_result.result = botEatBot();
+                    botJumpAdr(command_result.result); // меняем адрес текущей команды
                     // стена - 2 пусто - 3 органика - 4 живой - 5
                     breakflag = 1;
                     break;
@@ -102,14 +179,18 @@ public class Bot {
 //.............   отдать безвозмездно в относительном напралении  ........
                 case 36:
                 case 37:    // увеличил шансы появления этой команды
-                    botJumpAdr(botGive()); // меняем адрес текущей команды
+                    command_result.arg1 = botGetParam() % 8;
+                    command_result.result = botGive();
+                    botJumpAdr(command_result.result); // меняем адрес текущей команды
                     // стена - 2 пусто - 3 органика - 4 удачно - 5
                     break;
 //************************************************************************
 //.............   распределить энергию в относительном напралении  .......
                 case 38:
                 case 39:    // увеличил шансы появления этой команды
-                    botJumpAdr(botCare()); // меняем адрес текущей команды
+                    command_result.arg1 = botGetParam() % 8;
+                    command_result.result = botCare();
+                    botJumpAdr(command_result.result); // меняем адрес текущей команды
                     // стена - 2 пусто - 3 органика - 4 удачно - 5
                     break;
 
@@ -117,7 +198,9 @@ public class Bot {
 //************************************************************************
 //.............   посмотреть с параметром ................................
                 case 40:
-                    botJumpAdr(botSeeBots()); // меняем адрес текущей команды
+                    command_result.arg1 = botGetParam() % 8;
+                    command_result.result = botSeeBots();
+                    botJumpAdr(command_result.result); // меняем адрес текущей команды
                     // пусто - 2 стена - 3 органик - 4 бот -5 родня -  6
                     break;
 
@@ -125,41 +208,49 @@ public class Bot {
 //***********************************************************************
 //...................  проверка уровня рельефа  .........................
                 case 41:    // checkLevel() берет параметр из генома, возвращает 2, если рельеф выше, иначе - 3
-                    botJumpAdr(checkLevel());
+                    command_result.arg1 = botGetParam() % 8;
+                    command_result.result = checkLevel();
+                    botJumpAdr(command_result.result);
                     break;
 //***********************************************************************
 //...................  проверка здоровья  ...............................
                 case 42:    // checkHealth() берет параметр из генома, возвращает 2, если здоровья больше, иначе - 3
-                    botJumpAdr(checkHealth());
+                    command_result.arg1 = botGetParam() % 8;
+                    command_result.result = checkHealth();
+                    botJumpAdr(command_result.result);
                     break;
 //***********************************************************************
 //...................  проверка  минералов ..............................
                 case 43:    // checkMineral() берет параметр из генома, возвращает 2, если минералов больше, иначе - 3
-                    botJumpAdr(checkMineral());
+                    command_result.arg1 = botGetParam() % 8;
+                    command_result.result = checkMineral();
+                    botJumpAdr(command_result.result);
                     break;
-
 
 //*************************************************************
 //...............  окружен ли бот?   ..........................
-                case 46:   // isFullAroud() возвращает  1, если бот окружен и 2, если нет
-                    botJumpAdr(isFullAround());
+                case 46:   // isFullAround() возвращает  1, если бот окружен и 2, если нет
+                    command_result.result = isFullAround();
+                    botJumpAdr(command_result.result);
                     break;
 //*************************************************************
 //.............. приход энергии есть? .........................
                 case 47:  // isHealthGrow() возвращает 1, если энегрия у бота прибавляется, иначе - 2
-                    botJumpAdr(isHealthGrow());
+                    command_result.result = isHealthGrow();
+                    botJumpAdr(command_result.result);
                     break;
 //*************************************************************
 //............... минералы прибавляются? ......................
                 case 48:   // isMineralGrow() возвращает 1, если энегрия у бота прибавляется, иначе - 2
-                    botJumpAdr(isMineralGrow());
+                    command_result.result = isMineralGrow();
+                    botJumpAdr(command_result.result);
                     break;
 
 
 //********************************************************************
 //................   генная атака  ...................................
                 case 52:  // бот атакует геном соседа, на которого он повернут
-                    botGenAttack(); // случайным образом меняет один байт
+                    command_result.result = botGenAttack(); // случайным образом меняет один байт
                     botIncAdr(1);
                     breakflag = 1;
                     break;
@@ -181,7 +272,7 @@ public class Bot {
 //.......  количество накопленой энергии, возможно                  ........
 //.......  пришло время подохнуть или породить потомка              ........
 
-        if (alive == LV_ALIVE) {
+        if (isAlive()) {
 
             //... проверим уровень энергии у бота, возможно пришла пора помереть или родить
             if (health > 999) {                     // если энергии больше 999, то плодим нового бота
@@ -203,7 +294,7 @@ public class Bot {
 //            }
 
             int level = World.simulation.map[x][y];
-            int sealevel = World.simulation.sealevel;
+            int sealevel = World.simulation.seaLevel;
             if ((level > sealevel - 30) && (level <= sealevel)) {
                 if (level <= sealevel - 20) {
                     mineral++;
@@ -304,6 +395,10 @@ public class Bot {
         return mind[(adr + 1) % MIND_SIZE]; // возвращает число, следующее за выполняемой командой
     }
 
+    private int botGetParam(int a) {
+        return mind[(adr + a + 1) % MIND_SIZE]; // возвращает число, следующее за выполняемой командой
+    }
+
     //жжжжжжжжжжжжжжжжжжжхжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжж
     // -- увеличение адреса команды   --------------
     private void botIncAdr(int a) {
@@ -315,6 +410,51 @@ public class Bot {
     private void botJumpAdr(int a) {
         int bias = mind[(adr + a) % MIND_SIZE];
         botIncAdr(bias);
+    }
+
+    private int getActionValue(int action) {
+        int value;
+
+        action = (action % 11) + 1;
+        switch (action) {
+            case 1:
+                value = botMove();
+                break;
+            case 2:
+                value = botEatBot();
+                break;
+            case 3:
+                value = botGive();
+                break;
+            case 4:
+                value = botCare();
+                break;
+            case 5:
+                value = botSeeBots();
+                break;
+            case 6:
+                value = checkLevel();
+                break;
+            case 7:
+                value = checkHealth();
+                break;
+            case 8:
+                value = checkMineral();
+                break;
+            case 9:
+                value = isFullAround();
+                break;
+            case 10:
+                value = isHealthGrow();
+                break;
+            case 11:
+                value = isMineralGrow();
+                break;
+            default:
+                value = 0;
+        }
+
+        return value;
     }
 
 
@@ -338,9 +478,10 @@ public class Bot {
 
 
     //жжжжжжжжжжжжжжжжжжжхжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжж
-    //===== изменяет случайный байт в геноме  ==============
-    private void botRotate() {
+    //===== поворачивает бота в заданном параметром направлении  ==============
+    private int botRotate() {
         direction = (direction + botGetParam()) % 8;
+        return direction;
     }
 
     //жжжжжжжжжжжжжжжжжжжхжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжж
@@ -357,6 +498,7 @@ public class Bot {
     //жжжжжжжжжжжжжжжжжжжхжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжж
     //=====   удаление бота        =============
     private void deleteBot(Bot bot) {
+        bot.deleted = true;
         World.simulation.matrix[bot.x][bot.y] = null;   // удаление бота с карты
 
         bot.prev.next = bot.next;            // удаление бота из цепочки
@@ -370,7 +512,7 @@ public class Bot {
     // ...  фотосинтез, этой командой забит геном первого бота     ...............
     // ...  бот получает энергию солнца в зависимости от глубины   ...............
     // ...  и количества минералов, накопленных ботом              ...............
-    private void botEatSun() {
+    private int botEatSun() {
         int t;
         if (mineral < 100) {
             t = 0;
@@ -382,27 +524,31 @@ public class Bot {
 
         int hlt = 0;
         int level = World.simulation.map[x][y];
-        int sealevel = World.simulation.sealevel;
+        int sealevel = World.simulation.seaLevel;
         if ((level > sealevel) && (level <= sealevel + 60)) {
             hlt = t + (int) ((sealevel + 60 - level) * 0.2); // формула вычисления энергии
         }
         if (hlt > 0) {
             health = health + hlt;          // прибавляем полученную энергия к энергии бота
             goGreen(hlt);                   // бот от этого зеленеет
+            return hlt;
         }
+        return 0;
     }
 
 
     // ...  преобразование минералов в энергию  ...............
-    private void botMineral2Health() {
+    private int botMineral2Health() {
         if (mineral > 100) {                // максимальное количество минералов, которые можно преобразовать в энергию = 100
             mineral -= 100;
             health += 400;                  // 1 минерал = 4 энергии
             goBlue( 100);             // бот от этого синеет
+            return 400;
         } else {                            // если минералов меньше 100, то все минералы переходят в энергию
             goBlue(mineral);
-            health = health + 4*mineral;
+            health = health + 4 * mineral;
             mineral = 0;
+            return 4 * mineral;
         }
     }
 
@@ -531,19 +677,22 @@ public class Bot {
 
 
     //======== атака на геном соседа, меняем случайны ген случайным образом  ===============
-    private void botGenAttack() {   // вычисляем кто перед ботом (используется только относительное направление)
+    private int botGenAttack() {   // вычисляем кто перед ботом (используется только относительное направление)
         int xt = xFromVektorR(0);
         int yt = yFromVektorR(0);
         if ((yt >= 0) && (yt < World.simulation.height) && (World.simulation.matrix[xt][yt] != null)) {
-            if (World.simulation.matrix[xt][yt].alive == LV_ALIVE) { // если там живой бот
+            if (World.simulation.matrix[xt][yt].isAlive()) { // если там живой бот
                 health = health - 10;               // то атакуюий бот теряет на атаку 10 энергии
                 if (health > 0) {                   // если он при этом не умер
-                    int ma = (int) (rand() * 64);   // 0..63 // то у жертвы случайным образом меняется один ген
-                    int mc = (int) (rand() * 64);   // 0..63
+                    int ma = (int) (rand() * MIND_SIZE);   // 0..63 // то у жертвы случайным образом меняется один ген
+                    int mc = (int) (rand() * MIND_SIZE);   // 0..63
                     World.simulation.matrix[xt][yt].mind[ma] = (byte) mc;
+                    return 2;
                 }
+                return 1;
             }
         }
+        return 0;
     }
 
 
@@ -624,15 +773,15 @@ public class Bot {
 
     //....................................................................
     // рождение нового бота делением
-    private void botDouble() {
+    private int botDouble() {
         health = health - 150;          // бот затрачивает 150 единиц энергии на создание копии
-        if (health <= 0) return;        // если у него было меньше 150, то пора помирать
+        if (health <= 0) return 0;        // если у него было меньше 150, то пора помирать
 
         int n = findEmptyDirection();   // проверим, окружен ли бот
         if (n == 8) {                   // если бот окружен, то он в муках погибает
             health = 0;
 //            bot.health += 500;
-            return;
+            return 0;
         }
 
         Bot newbot = new Bot();
@@ -641,6 +790,10 @@ public class Bot {
         int yt = yFromVektorR(n);
 
         System.arraycopy(mind, 0, newbot.mind, 0, MIND_SIZE);
+
+        // System.arraycopy(memory, 0, newbot.memory, 0, MEMORY_SIZE / 2);
+        // System.arraycopy(mind, MIND_SIZE - MEMORY_SIZE / 2, newbot.memory, MEMORY_SIZE / 2, MEMORY_SIZE / 2);
+        System.arraycopy(mind, MIND_SIZE - MEMORY_SIZE, newbot.memory, 0, MEMORY_SIZE);
 
         newbot.adr = 0;                 // указатель текущей команды в новорожденном устанавливается в 0
         newbot.x = xt;
@@ -673,6 +826,7 @@ public class Bot {
         prev = newbot;
 
         World.simulation.matrix[xt][yt] = newbot;    // отмечаем нового бота в массиве matrix
+        return 1;
     }
 
     private int getNewColor(int parentColor) {
@@ -784,8 +938,8 @@ public class Bot {
         }
 
         int hlt = 0;
-        if ((World.simulation.map[x][y] > World.simulation.sealevel) && (World.simulation.map[x][y] <= World.simulation.sealevel + 60)) {
-            hlt = (World.simulation.sealevel + 60 - World.simulation.map[x][y]) / 5 + t; // формула вычисления энергии
+        if ((World.simulation.map[x][y] > World.simulation.seaLevel) && (World.simulation.map[x][y] <= World.simulation.seaLevel + 60)) {
+            hlt = (World.simulation.seaLevel + 60 - World.simulation.map[x][y]) / 5 + t; // формула вычисления энергии
         }
         if (hlt >= 3) {
             return 1;
@@ -800,7 +954,7 @@ public class Bot {
     //========   in - номер бота                =====
     //========   out- 1 - да, 2 - нет           =====
     private int isMineralGrow() {
-        if ((World.simulation.map[x][y] > World.simulation.sealevel - 30) && (World.simulation.map[x][y] <= World.simulation.sealevel)) return 1;
+        if ((World.simulation.map[x][y] > World.simulation.seaLevel - 30) && (World.simulation.map[x][y] <= World.simulation.seaLevel)) return 1;
         return 2;
     }
 

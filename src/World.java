@@ -3,12 +3,10 @@ import javax.swing.event.ChangeEvent;
 import javax.swing.event.ChangeListener;
 
 import java.awt.*;
-import java.awt.event.ActionEvent;
-import java.awt.event.ActionListener;
+import java.awt.event.*;
 import java.awt.image.BufferedImage;
 import java.awt.image.DataBufferInt;
-//import java.util.concurrent.locks.Lock;
-//import java.util.concurrent.locks.ReentrantLock;
+import java.util.ListIterator;
 
 
 // Основной класс программы.
@@ -17,14 +15,15 @@ public class World extends JFrame {
     int width;
     int height;
     private int zoom;
-    int sealevel;
-    private int drawstep;
+    int seaLevel;
+    private int drawStep;
     int[][] map;    //Карта мира
     private int[] mapInGPU;    //Карта для GPU
-    private Image mapbuffer = null;
+    private Image mapBuffer = null;
     Bot[][] matrix;    //Матрица мира
-    private Bot zerobot = new Bot();
-    private Bot currentbot;
+    private Bot zeroBot = new Bot();
+    private Bot currentBot;
+    private Bot currenGraphicstbot;
     int generation;
     private int population;
     private int organic;
@@ -32,7 +31,8 @@ public class World extends JFrame {
     private Image buffer = null;
 
     private Thread thread = null;
-    private boolean started = true; // поток работает?
+    private Thread graphicsThread = null;
+    private boolean running = true; // поток работает?
     private JPanel canvas = new JPanel() {
     	public void paint(Graphics g) {
     		g.drawImage(buffer, 0, 0, null);
@@ -44,8 +44,10 @@ public class World extends JFrame {
     private JLabel generationLabel = new JLabel(" Generation: 0 ");
     private JLabel populationLabel = new JLabel(" Population: 0 ");
     private JLabel organicLabel = new JLabel(" Organic: 0 ");
+    private JLabel coordsLabel = new JLabel(" Coords: 0,0 ");
 
     private JSlider perlinSlider = new JSlider (JSlider.HORIZONTAL, 0, 480, 300);
+    private JSlider zoomSlider = new JSlider (JSlider.HORIZONTAL, 0, 8, 1);
     private JButton mapButton = new JButton("Create Map");
     private JSlider sealevelSlider = new JSlider (JSlider.HORIZONTAL, 0, 256, 145);
     private JButton startButton = new JButton("Start/Stop");
@@ -59,22 +61,28 @@ public class World extends JFrame {
     private JRadioButton ageButton = new JRadioButton("Age", false);
     private JRadioButton familyButton = new JRadioButton("Family", false);
 
+    private DefaultListModel<String> commandsListModel = new DefaultListModel<>();
+    private JList<String> commands_list = new JList<>(commandsListModel);
+    private JScrollPane commandsListScroller = new JScrollPane(commands_list);
+
+    boolean adamGenerated = false;
+    Bot last_cursor_bot = null;
+
     public World() {
     	
         simulation = this;
 
         zoom = 1;
-        sealevel = 145;
-        drawstep = 10;
+        seaLevel = 145;
+        drawStep = 10;
 
-        setTitle("Genesis 1.2.0");
+        setTitle("Genesis 1.2.0-M");
         setSize(new Dimension(1800, 900));
         Dimension sSize = Toolkit.getDefaultToolkit().getScreenSize(), fSize = getSize();
         if (fSize.height > sSize.height) fSize.height = sSize.height;
         if (fSize.width  > sSize.width) fSize.width = sSize.width;
         //setLocation((sSize.width - fSize.width)/2, (sSize.height - fSize.height)/2);
         setSize(new Dimension(sSize.width, sSize.height));
-        
         
         setDefaultCloseOperation (WindowConstants.EXIT_ON_CLOSE);
 
@@ -98,7 +106,9 @@ public class World extends JFrame {
         organicLabel.setPreferredSize(new Dimension(140, 18));
         organicLabel.setBorder(BorderFactory.createLoweredBevelBorder());
         statusPanel.add(organicLabel);
-
+        coordsLabel.setPreferredSize(new Dimension(140, 18));
+        coordsLabel.setBorder(BorderFactory.createLoweredBevelBorder());
+        statusPanel.add(coordsLabel);
 
         JToolBar toolbar = new JToolBar();
         toolbar.setOrientation(1);
@@ -117,8 +127,23 @@ public class World extends JFrame {
         perlinSlider.setAlignmentX(JComponent.LEFT_ALIGNMENT);
         toolbar.add(perlinSlider);
 
+        // JLabel sliderZoomLabel = new JLabel("Zoom");
+        // toolbar.add(sliderZoomLabel);
+
+        zoomSlider.addChangeListener(new zoomSliderChange());
+        zoomSlider.setMajorTickSpacing(2);
+        zoomSlider.setMinorTickSpacing(1);
+        zoomSlider.setPaintTicks(true);
+        zoomSlider.setPaintLabels(true);
+        zoomSlider.setPreferredSize(new Dimension(100, zoomSlider.getPreferredSize().height));
+        zoomSlider.setAlignmentX(JComponent.LEFT_ALIGNMENT);
+        // toolbar.add(zoomSlider);
+
         mapButton.addActionListener(new mapButtonAction());
         toolbar.add(mapButton);
+
+        JLabel clickAnywhereLabel = new JLabel("Click on the map to start");
+        toolbar.add(clickAnywhereLabel);
 
         JLabel slider2Label = new JLabel("Sea level");
         toolbar.add(slider2Label);
@@ -134,11 +159,12 @@ public class World extends JFrame {
 
         startButton.addActionListener(new startButtonAction());
         toolbar.add(startButton);
+        startButton.setEnabled(false);
 
-        JLabel slider3Label = new JLabel("Draw step");
-        toolbar.add(slider3Label);
+        // JLabel clickAnywhereLabel = new JLabel("Draw step");
+        // toolbar.add(clickAnywhereLabel);
 
-        drawstepSlider.addChangeListener(new drawstepSliderChange());
+        //drawstepSlider.addChangeListener(new drawstepSliderChange());
         drawstepSlider.setMajorTickSpacing(10);
 //        drawstepSlider.setMinimum(1);
 //        drawstepSlider.setMinorTickSpacing(64);
@@ -146,8 +172,7 @@ public class World extends JFrame {
         drawstepSlider.setPaintLabels(true);
         drawstepSlider.setPreferredSize(new Dimension(100, sealevelSlider.getPreferredSize().height));
         drawstepSlider.setAlignmentX(JComponent.LEFT_ALIGNMENT);
-        toolbar.add(drawstepSlider);
-
+        //toolbar.add(drawstepSlider);
 
         ButtonGroup group = new ButtonGroup();
         group.add(baseButton);
@@ -163,14 +188,206 @@ public class World extends JFrame {
         toolbar.add(ageButton);
         toolbar.add(familyButton);
 
+
+        JToolBar right_toolbar = new JToolBar();
+        right_toolbar.setOrientation(1);
+        container.add(right_toolbar, BorderLayout.EAST);
+
+        JLabel commandsLabel = new JLabel("Last commands:");
+        right_toolbar.add(commandsLabel);
+        right_toolbar.add(commandsListScroller);
+        commandsListScroller.setPreferredSize(new Dimension(160, height));
+
+        canvas.addMouseMotionListener(new canvasMouseMoved());
+        canvas.addMouseListener(new canvasMouse());
+
         this.pack();
         this.setVisible(true);
         setExtendedState(MAXIMIZED_BOTH);
     }
 
+    class canvasMouseMoved implements MouseMotionListener {
+        @Override
+        public void mouseDragged(MouseEvent e) {
+            // e.getX(), e.getY()
+        }
+
+        @Override
+        public void mouseMoved(MouseEvent e) {
+            String s = " Coords: " + String.valueOf(e.getX()) + "," + String.valueOf(e.getY()) + " ";
+            coordsLabel.setForeground(new Color(127, 127,127));
+            // last_cursor_bot = null;
+
+            if (matrix != null) {
+                try {
+                    Bot bot = matrix[e.getX()][e.getY()];
+                    if (bot != null && bot.isAlive()) {
+                        s += " [!] ";
+                        coordsLabel.setForeground(new Color(bot.c_red, bot.c_green, bot.c_blue));
+                        printCommands(bot);
+                        last_cursor_bot = bot;
+                    }
+                } catch (ArrayIndexOutOfBoundsException ee) {
+                    coordsLabel.setText(s);
+                    last_cursor_bot = null;
+                    return;
+                }
+            }
+
+            coordsLabel.setText(s);
+        }
+
+        public void printCommands(Bot bot) {
+            SimpleStack<CommandResult> last_actions = (SimpleStack<CommandResult>) bot.last_actions.clone();
+            commandsListModel.clear();
+
+            for (CommandResult command_result : last_actions) {
+
+                String command_code;
+                switch (command_result.command) {
+                    case 0:  // мутация
+                        command_code = "MUT";
+                        break;
+                    case 6:
+                    case 1:  // чтение из памяти
+                        command_code = "MEM_READ";
+                        break;
+                    case 10:
+                    case 2:  // запись в память
+                        command_code = "MEM_WRITE";
+                        break;
+
+                    case 8:
+                    case 3:  // увеличение ячейки памяти на 1
+                        command_code = "MEM_INCR";
+                        break;
+
+                    case 9:
+                    case 4:  // уменьшение ячейки памяти на 1
+                        command_code = "MEM_DECR";
+                        break;
+
+                    case 7:
+                    case 5:  // условный переход на основе памяти
+                        command_code = "MEM_IF";
+                        break;
+                    case 16:  // размножение делением
+                        command_code = "DOUBLE";
+                        break;
+                    case 23:  // повернуть с параметром
+                        command_code = "ROT";
+                        break;
+                    case 26:  // шаг с параметром
+                        command_code = "MOVE";  // 2-пусто 3-стена 4-органика 5-бот 6-родня
+                        break;
+                    case 32:  // фотосинтез
+                        command_code = "PHOTO";
+                        break;
+                    case 33:  // хемосинтез (энерия из минералов)
+                        command_code = "CHEMO";
+                        break;
+                    case 34:  // съесть в относительном напралении
+                        command_code = "EAT";  // стена - 2 пусто - 3 органика - 4 живой - 5
+                        break;
+                    case 36:  // отдать безвозмездно в относительном напралении
+                    case 37:  // стена - 2 пусто - 3 органика - 4 удачно - 5
+                        command_code = "GIVE";
+                        break;
+                    case 38:  // распределить энергию в относительном напралении,
+                    case 39:  // стена - 2 пусто - 3 органика - 4 удачно - 5
+                        command_code = "CARE";
+                        break;
+                    case 40:  // посмотреть с параметром
+                        command_code = "LOOK";  // пусто - 2 стена - 3 органик - 4 бот -5 родня -  6
+                        break;
+                    case 41:    // checkLevel() берет параметр из генома
+                        command_code = "CHECK_LEVEL";  // возвращает 2, если рельеф выше, иначе - 3
+                        break;
+                    case 42:    // checkHealth() берет параметр из генома
+                        command_code = "CHECK_HEALTH";  // возвращает 2, если здоровья больше, иначе - 3
+                        break;
+                    case 43:    // checkMineral() берет параметр из генома
+                        command_code = "CHECK_MINERAL";  //  возвращает 2, если минералов больше, иначе - 3
+                        break;
+                    case 46:   // isFullAround()
+                        command_code = "CHECK_AROUND";  // возвращает 1, если бот окружен и 2, если нет
+                        break;
+                    case 47:  // isHealthGrow() возвращает 1, если энегрия у бота прибавляется, иначе - 2
+                        command_code = "CHECK_HP_GROW";
+                        break;
+                    case 48:   // isMineralGrow() возвращает 1, если энегрия у бота прибавляется, иначе - 2
+                        command_code = "CHECK_MIN_GROW";
+                        break;
+                    case 52:  // бот атакует геном соседа, на которого он повернут
+                        command_code = "GEN_ATTACK";
+                        break;
+                    default:
+                        command_code = "NOP";
+                        break;
+                }
+
+                String arguments = "()";
+                if (command_result.arg1 != -1) {
+                    if (command_result.arg2 != -1) {
+                        arguments = "(" + command_result.arg1 + ", " + command_result.arg2 + ")";
+                    } else {
+                        arguments = "(" + command_result.arg1 + ")";
+                    }
+                }
+
+                String result = ";";
+                if (command_result.result != -1) {
+                    result = " => " + command_result.result + ";";
+                }
+
+                commandsListModel.addElement(command_result.command + " " + command_code + arguments + result);
+            }
+        }
+    }
+
+    class canvasMouse implements MouseListener {
+        @Override
+        public void mouseClicked(MouseEvent e) {
+            if (!adamGenerated || zeroBot.next == zeroBot) {
+                generateAdam(e.getX(), e.getY());
+                adamGenerated = true;
+                paint1();
+
+                perlinSlider.setEnabled(false);
+                mapButton.setEnabled(false);
+                sealevelSlider.setEnabled(false);
+                thread	= new Worker(); // создаем новый поток
+                thread.start();
+                graphicsThread = new GraphicsWorker();
+                graphicsThread.start();
+                startButton.setEnabled(true);
+            }
+        }
+
+        @Override
+        public void mousePressed(MouseEvent e) {
+
+        }
+
+        @Override
+        public void mouseReleased(MouseEvent e) {
+
+        }
+
+        @Override
+        public void mouseEntered(MouseEvent e) {
+
+        }
+
+        @Override
+        public void mouseExited(MouseEvent e) {
+
+        }
+    }
+
     class sealevelSliderChange implements ChangeListener {
         public void stateChanged(ChangeEvent event) {
-            sealevel = sealevelSlider.getValue();
+            seaLevel = sealevelSlider.getValue();
             if (map != null) {
                 paintMapView();
                 paint1();
@@ -178,11 +395,9 @@ public class World extends JFrame {
         }
     }
 
-    class drawstepSliderChange implements ChangeListener {
+    class zoomSliderChange implements ChangeListener {
         public void stateChanged(ChangeEvent event) {
-            int ds = drawstepSlider.getValue();
-            if (ds == 0) ds = 1;
-            drawstep = ds;
+            zoom = Math.max(1, zoomSlider.getValue());
         }
     }
 
@@ -191,22 +406,28 @@ public class World extends JFrame {
             width = canvas.getWidth() / zoom;    // Ширина доступной части экрана для рисования карты
             height = canvas.getHeight() / zoom;
             generateMap((int) (Math.random() * 10000));
-            generateAdam();
+            currenGraphicstbot = null;
+            // generateAdam();
             paintMapView();
             paint1();
+            adamGenerated = false;
         }
     }
     class startButtonAction implements ActionListener {
         public void actionPerformed(ActionEvent e) {
-        	if(thread==null) {
+        	if(adamGenerated && thread==null && zeroBot.next != null) {
         	    perlinSlider.setEnabled(false);
         	    mapButton.setEnabled(false);
+        	    sealevelSlider.setEnabled(false);
         		thread	= new Worker(); // создаем новый поток
         		thread.start();
+        		graphicsThread = new GraphicsWorker();
+                graphicsThread.start();
         	} else {
-        		started = false;        //Выставляем влаг
+        		running = false;        //Выставляем влаг
         		thread = null;
                 perlinSlider.setEnabled(true);
+                sealevelSlider.setEnabled(true);
                 mapButton.setEnabled(true);
         	}
         }
@@ -216,23 +437,23 @@ public class World extends JFrame {
         int mapred;
         int mapgreen;
         int mapblue;
-        mapbuffer = canvas.createImage(width * zoom, height * zoom); // ширина - высота картинки
-        Graphics g = mapbuffer.getGraphics();
+        mapBuffer = canvas.createImage(width * zoom, height * zoom); // ширина - высота картинки
+        Graphics g = mapBuffer.getGraphics();
 
         final BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
         final int[] rgb = ((DataBufferInt) image.getRaster().getDataBuffer()).getData();
 
         for (int i = 0; i < rgb.length; i++) {
-            if (mapInGPU[i] < sealevel) {                     // подводная часть
+            if (mapInGPU[i] < seaLevel) {                     // подводная часть
                 mapred = 5;
-                mapblue = 140 - (sealevel - mapInGPU[i]) * 3;
-                mapgreen = 150 - (sealevel - mapInGPU[i]) * 10;
+                mapblue = 140 - (seaLevel - mapInGPU[i]) * 3;
+                mapgreen = 150 - (seaLevel - mapInGPU[i]) * 10;
                 if (mapgreen < 10) mapgreen = 10;
                 if (mapblue < 20) mapblue = 20;
             } else {                                        // надводная часть
-                mapred = (int)(150 + (mapInGPU[i] - sealevel) * 2.5);
-                mapgreen = (int)(100 + (mapInGPU[i] - sealevel) * 2.6);
-                mapblue = 50 + (mapInGPU[i] - sealevel) * 3;
+                mapred = (int)(150 + (mapInGPU[i] - seaLevel) * 2.5);
+                mapgreen = (int)(100 + (mapInGPU[i] - seaLevel) * 2.6);
+                mapblue = 50 + (mapInGPU[i] - seaLevel) * 3;
                 if (mapred > 255) mapred = 255;
                 if (mapgreen > 255) mapgreen = 255;
                 if (mapblue > 255) mapblue = 255;
@@ -247,10 +468,11 @@ public class World extends JFrame {
 
 //    @Override
     public void paint1() {
+        Bot cb = currenGraphicstbot;
 
         Image buf = canvas.createImage(width * zoom, height * zoom); //Создаем временный буфер для рисования
-        Graphics g = buf.getGraphics(); //подеменяем графику на временный буфер
-        g.drawImage(mapbuffer, 0, 0, null);
+        Graphics g = buf.getGraphics(); //подменяем графику на временный буфер
+        g.drawImage(mapBuffer, 0, 0, null);
 
         final BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
         final int[] rgb = ((DataBufferInt) image.getRaster().getDataBuffer()).getData();
@@ -259,52 +481,56 @@ public class World extends JFrame {
         organic = 0;
         int mapred, mapgreen, mapblue;
 
-        while (currentbot != zerobot) {
-            if (currentbot.alive == 3) {                      // живой бот
+        while (cb != null && cb != zeroBot) {
+            if (cb.isAlive() && !cb.deleted) {                      // живой бот
                 if (baseButton.isSelected()) {
-                    rgb[currentbot.y * width + currentbot.x] = (255 << 24) | (currentbot.c_red << 16) | (currentbot.c_green << 8) | currentbot.c_blue;
+                    rgb[cb.y * width + cb.x] = (255 << 24) | (cb.c_red << 16) | (cb.c_green << 8) | cb.c_blue;
                 } else if (energyButton.isSelected()) {
-                    mapgreen = 255 - (int) (currentbot.health * 0.25);
+                    mapgreen = 255 - (int) (cb.health * 0.25);
                     if (mapgreen < 0) mapgreen = 0;
-                    rgb[currentbot.y * width + currentbot.x] = (255 << 24) | (255 << 16) | (mapgreen << 8) | 0;
+                    rgb[cb.y * width + cb.x] = (255 << 24) | (255 << 16) | (mapgreen << 8);
                 } else if (mineralButton.isSelected()) {
-                    mapblue = 255 - (int) (currentbot.mineral * 0.5);
+                    mapblue = 255 - (int) (cb.mineral * 0.5);
                     if (mapblue < 0) mapblue = 0;
-                    rgb[currentbot.y * width + currentbot.x] = (255 << 24) | (0 << 16) | (255 << 8) | mapblue;
+                    rgb[cb.y * width + cb.x] = (255 << 24) | (255 << 8) | mapblue;
                 } else if (combinedButton.isSelected()) {
-                    mapgreen = (int) (currentbot.c_green * (1 - currentbot.health * 0.0005));
+                    mapgreen = (int) (cb.c_green * (1 - cb.health * 0.0005));
                     if (mapgreen < 0) mapgreen = 0;
-                    mapblue = (int) (currentbot.c_blue * (0.8 - currentbot.mineral * 0.0005));
-                    rgb[currentbot.y * width + currentbot.x] = (255 << 24) | (currentbot.c_red << 16) | (mapgreen << 8) | mapblue;
+                    mapblue = (int) (cb.c_blue * (0.8 - cb.mineral * 0.0005));
+                    rgb[cb.y * width + cb.x] = (255 << 24) | (cb.c_red << 16) | (mapgreen << 8) | mapblue;
                 } else if (ageButton.isSelected()) {
-                    mapred = 255 - (int) (Math.sqrt(currentbot.age) * 4);
+                    mapred = 255 - (int) (Math.sqrt(cb.age) * 4);
                     if (mapred < 0) mapred = 0;
-                    rgb[currentbot.y * width + currentbot.x] = (255 << 24) | (mapred << 16) | (0 << 8) | 255;
+                    rgb[cb.y * width + cb.x] = (255 << 24) | (mapred << 16) | 255;
                 } else if (familyButton.isSelected()) {
-                    rgb[currentbot.y * width + currentbot.x] = currentbot.c_family;
+                    rgb[cb.y * width + cb.x] = cb.c_family;
                 }
                 population++;
-            } else if (currentbot.alive == 1) {                                            // органика, известняк, коралловые рифы
-                if (map[currentbot.x][currentbot.y] < sealevel) {                     // подводная часть
-                    mapred = 20;
-                    mapblue = 160 - (sealevel - map[currentbot.x][currentbot.y]) * 2;
-                    mapgreen = 170 - (sealevel - map[currentbot.x][currentbot.y]) * 4;
-                    if (mapblue < 40) mapblue = 40;
-                    if (mapgreen < 20) mapgreen = 20;
-                } else {                                    // скелетики, трупики на суше
-                    mapred = (int) (80 + (map[currentbot.x][currentbot.y] - sealevel) * 2.5);   // надводная часть
-                    mapgreen = (int) (60 + (map[currentbot.x][currentbot.y] - sealevel) * 2.6);
-                    mapblue = 30 + (map[currentbot.x][currentbot.y] - sealevel) * 3;
-                    if (mapred > 255) mapred = 255;
-                    if (mapblue > 255) mapblue = 255;
-                    if (mapgreen > 255) mapgreen = 255;
+            } else if (cb.alive == 1) {                                            // органика, известняк, коралловые рифы
+                try {
+                    if (map[cb.x][cb.y] < seaLevel) {                     // подводная часть
+                        mapred = 20;
+                        mapblue = 160 - (seaLevel - map[cb.x][cb.y]) * 2;
+                        mapgreen = 170 - (seaLevel - map[cb.x][cb.y]) * 4;
+                        if (mapblue < 40) mapblue = 40;
+                        if (mapgreen < 20) mapgreen = 20;
+                    } else {                                    // скелетики, трупики на суше
+                        mapred = (int) (80 + (map[cb.x][cb.y] - seaLevel) * 2.5);   // надводная часть
+                        mapgreen = (int) (60 + (map[cb.x][cb.y] - seaLevel) * 2.6);
+                        mapblue = 30 + (map[cb.x][cb.y] - seaLevel) * 3;
+                        if (mapred > 255) mapred = 255;
+                        if (mapblue > 255) mapblue = 255;
+                        if (mapgreen > 255) mapgreen = 255;
+                    }
+                    rgb[cb.y * width + cb.x] = (255 << 24) | (mapred << 16) | (mapgreen << 8) | mapblue;
+                    organic++;
+                } catch (ArrayIndexOutOfBoundsException err) {
+                    break;
                 }
-                rgb[currentbot.y * width + currentbot.x] = (255 << 24) | (mapred << 16) | (mapgreen << 8) | mapblue;
-                organic++;
             }
-            currentbot = currentbot.next;
+            cb = cb.next;
         }
-        currentbot = currentbot.next;
+        // cb = cb.next;
 
         g.drawImage(image, 0, 0, null);
 
@@ -319,24 +545,28 @@ public class World extends JFrame {
 
     class Worker extends Thread {
         public void run() {
-            started	= true;         // Флаг работы потока, если false  поток заканчивает работу
-            while (started) {       // обновляем матрицу
-                long time1 = System.currentTimeMillis();
-                while (currentbot != zerobot) {
-                    if (currentbot.alive == 3) currentbot.step();
-                    currentbot = currentbot.next;
+            running = true;         // Флаг работы потока, если false, поток заканчивает работу
+            while (running) {       // обновляем матрицу
+                while (currentBot != zeroBot) {
+                    if (currentBot.isAlive()) {
+                        currentBot.step();
+                    }
+                    currentBot = currentBot.next;
                 }
-                currentbot = currentbot.next;
+                currentBot = currentBot.next;
+                currenGraphicstbot = currentBot;
                 generation++;
-                long time2 = System.currentTimeMillis();
-//                System.out.println("Step execute " + ": " + (time2-time1) + "");
-                if (generation % drawstep == 0) {             // отрисовка на экран через каждые ... шагов
-                    paint1();                           // отображаем текущее состояние симуляции на экран
-                }
-                long time3 = System.currentTimeMillis();
-//                System.out.println("Paint: " + (time3-time2));
             }
-            started = false;        // Закончили работу
+            running = false;        // Закончили работу
+        }
+    }
+
+    class GraphicsWorker extends Thread {
+        public void run() {
+            while (running) {
+                paintMapView();
+                paint1();
+            }
         }
     }
 
@@ -344,20 +574,8 @@ public class World extends JFrame {
 
     public static void main(String[] args) {
         simulation = new World();
-//        simulation.generateMap();
-//        simulation.generateAdam();
-//        simulation.run();
     }
 
-    // делаем паузу
-    // не используется
-    /*public void sleep() {
-        try {
-            int delay = 20;
-            Thread.sleep(delay);
-        } catch (InterruptedException e) {
-        }
-    }*/
 
     // генерируем карту
     public void generateMap(int seed) {
@@ -368,7 +586,7 @@ public class World extends JFrame {
         Perlin2D perlin = new Perlin2D(seed);
         for (int y = 0; y < height; y++) {
             for (int x = 0; x < width; x++) {
-                float f = (float) perlinSlider.getValue();
+                float f = (float) Math.max(1, perlinSlider.getValue());
                 float value = perlin.getNoise(x/f,y/f,8,0.45f);        // вычисляем точку ландшафта
                 map[x][y] = (int)(value * 255 + 128) & 255;
             }
@@ -382,15 +600,15 @@ public class World extends JFrame {
     }
 
     // генерируем первого бота
-    public void generateAdam() {
+    public void generateAdam(int x, int y) {
 
         Bot bot = new Bot();
-        zerobot.prev = bot;
-        zerobot.next = bot;
+        zeroBot.prev = bot;
+        zeroBot.next = bot;
 
         bot.adr = 0;            // начальный адрес генома
-        bot.x = width / 2;      // координаты бота
-        bot.y = height / 2;
+        bot.x = x;      // координаты бота
+        bot.y = y;
         bot.health = 990;       // энергия
         bot.mineral = 0;        // минералы
         bot.alive = 3;          // бот живой
@@ -399,14 +617,18 @@ public class World extends JFrame {
         bot.c_blue = 170;
         bot.c_green = 170;
         bot.direction = 5;      // направление
-        bot.prev = zerobot;     // ссылка на предыдущего
-        bot.next = zerobot;     // ссылка на следующего
-        for (int i = 0; i < 64; i++) {          // заполняем геном командой 32 - фотосинтез
+        bot.prev = zeroBot;     // ссылка на предыдущего
+        bot.next = zeroBot;     // ссылка на следующего
+        for (int i = 0; i < Bot.MIND_SIZE; i++) {          // заполняем геном командой 32 - фотосинтез
             bot.mind[i] = 32;
+        }
+        for (int i = 0; i < Bot.MEMORY_SIZE; i++) {          // заполняем геном командой 32 - фотосинтез
+            bot.memory[i] = 8;
         }
 
         matrix[bot.x][bot.y] = bot;             // помещаем бота в матрицу
-        currentbot = bot;                       // устанавливаем текущим
+        currentBot = bot;                       // устанавливаем текущим
+        currenGraphicstbot = bot;
     }
 
 
