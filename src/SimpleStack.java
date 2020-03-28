@@ -13,4 +13,8 @@ public class SimpleStack<E> extends LinkedList<E> {
         while (size() > limit) { super.removeLast(); }
         return true;
     }
+
+    public SimpleStack<E> makeCopy() {
+        return (SimpleStack<E>) clone();
+    }
 }

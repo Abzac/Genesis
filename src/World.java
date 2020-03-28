@@ -6,7 +6,6 @@ import java.awt.*;
 import java.awt.event.*;
 import java.awt.image.BufferedImage;
 import java.awt.image.DataBufferInt;
-import java.util.ListIterator;
 
 
 // Основной класс программы.
@@ -45,6 +44,10 @@ public class World extends JFrame {
     private JLabel populationLabel = new JLabel(" Population: 0 ");
     private JLabel organicLabel = new JLabel(" Organic: 0 ");
     private JLabel coordsLabel = new JLabel(" Coords: 0,0 ");
+    private JLabel colorLabel = new JLabel(" Color: 0, 0, 0 ");
+
+//    private JLabel dnaLabel = new JLabel("");
+    private JLabel memoryLabel = new JLabel("");
 
     private JSlider perlinSlider = new JSlider (JSlider.HORIZONTAL, 0, 480, 300);
     private JSlider zoomSlider = new JSlider (JSlider.HORIZONTAL, 0, 8, 1);
@@ -52,7 +55,7 @@ public class World extends JFrame {
     private JSlider sealevelSlider = new JSlider (JSlider.HORIZONTAL, 0, 256, 145);
     private JButton startButton = new JButton("Start/Stop");
     private JSlider drawstepSlider = new JSlider (JSlider.HORIZONTAL, 0, 40, 10);
-
+    private JButton reStartButton = new JButton("RESTART");
 
     private JRadioButton baseButton = new JRadioButton("Base", true);
     private JRadioButton combinedButton = new JRadioButton("Combined", false);
@@ -109,6 +112,23 @@ public class World extends JFrame {
         coordsLabel.setPreferredSize(new Dimension(140, 18));
         coordsLabel.setBorder(BorderFactory.createLoweredBevelBorder());
         statusPanel.add(coordsLabel);
+        colorLabel.setPreferredSize(new Dimension(140, 18));
+        colorLabel.setBorder(BorderFactory.createLoweredBevelBorder());
+        statusPanel.add(colorLabel);
+
+        JPanel memoryPanel = new JPanel(new FlowLayout());
+        memoryPanel.setLayout(new FlowLayout(FlowLayout.RIGHT));
+        memoryPanel.setBorder(BorderFactory.createLoweredBevelBorder());
+        container.add(memoryPanel, BorderLayout.NORTH);
+
+//        dnaLabel.setBorder(BorderFactory.createLoweredBevelBorder());
+//        dnaLabel.setPreferredSize(new Dimension(1200, 18));
+//        memoryPanel.add(dnaLabel);
+
+        memoryLabel.setBorder(BorderFactory.createLoweredBevelBorder());
+        memoryLabel.setPreferredSize(new Dimension(700, 18));
+        memoryPanel.add(memoryLabel);
+
 
         JToolBar toolbar = new JToolBar();
         toolbar.setOrientation(1);
@@ -141,9 +161,6 @@ public class World extends JFrame {
 
         mapButton.addActionListener(new mapButtonAction());
         toolbar.add(mapButton);
-
-        JLabel clickAnywhereLabel = new JLabel("Click on the map to start");
-        toolbar.add(clickAnywhereLabel);
 
         JLabel slider2Label = new JLabel("Sea level");
         toolbar.add(slider2Label);
@@ -188,6 +205,19 @@ public class World extends JFrame {
         toolbar.add(ageButton);
         toolbar.add(familyButton);
 
+        JLabel clickAnywhereLabel = new JLabel("Click on the map to start");
+        toolbar.add(clickAnywhereLabel);
+
+        toolbar.add(reStartButton);
+        reStartButton.setEnabled(false);
+        reStartButton.addActionListener(new reStartButtonAction());
+
+        baseButton.addActionListener(new changeViewTypeAction());
+        combinedButton.addActionListener(new changeViewTypeAction());
+        energyButton.addActionListener(new changeViewTypeAction());
+        mineralButton.addActionListener(new changeViewTypeAction());
+        ageButton.addActionListener(new changeViewTypeAction());
+        familyButton.addActionListener(new changeViewTypeAction());
 
         JToolBar right_toolbar = new JToolBar();
         right_toolbar.setOrientation(1);
@@ -196,7 +226,7 @@ public class World extends JFrame {
         JLabel commandsLabel = new JLabel("Last commands:");
         right_toolbar.add(commandsLabel);
         right_toolbar.add(commandsListScroller);
-        commandsListScroller.setPreferredSize(new Dimension(160, height));
+        commandsListScroller.setPreferredSize(new Dimension(200, height));
 
         canvas.addMouseMotionListener(new canvasMouseMoved());
         canvas.addMouseListener(new canvasMouse());
@@ -204,6 +234,36 @@ public class World extends JFrame {
         this.pack();
         this.setVisible(true);
         setExtendedState(MAXIMIZED_BOTH);
+
+        this.addWindowStateListener(new windowStateListener());
+        this.addComponentListener(new ComponentAdapter() {
+            public void componentResized(ComponentEvent componentEvent) {
+                if (!adamGenerated) {
+                    width = canvas.getWidth() / zoom;
+                    height = canvas.getHeight() / zoom;
+                    generateMap((int) (Math.random() * 10000));
+                    currenGraphicstbot = null;
+                    paintMapView();
+                    paint1();
+                }
+            }
+        });
+
+    }
+
+
+    class windowStateListener implements WindowStateListener {
+        @Override
+        public void windowStateChanged(WindowEvent e) {
+            if (!adamGenerated) {
+                width = canvas.getWidth() / zoom;
+                height = canvas.getHeight() / zoom;
+                generateMap((int) (Math.random() * 10000));
+                currenGraphicstbot = null;
+                paintMapView();
+                paint1();
+            }
+        }
     }
 
     class canvasMouseMoved implements MouseMotionListener {
@@ -214,17 +274,33 @@ public class World extends JFrame {
 
         @Override
         public void mouseMoved(MouseEvent e) {
-            String s = " Coords: " + String.valueOf(e.getX()) + "," + String.valueOf(e.getY()) + " ";
-            coordsLabel.setForeground(new Color(127, 127,127));
+            Pair<Integer, Integer> origCoords = getOrigCoords(e);
+
+            String s = " Coords: " + origCoords.v1 + "," + origCoords.v2 + " ";
+            colorLabel.setForeground(new Color(127, 127,127));
             // last_cursor_bot = null;
 
             if (matrix != null) {
                 try {
-                    Bot bot = matrix[e.getX()][e.getY()];
+                    Bot bot = matrix[origCoords.v1][origCoords.v2];
                     if (bot != null && bot.isAlive()) {
                         s += " [!] ";
-                        coordsLabel.setForeground(new Color(bot.c_red, bot.c_green, bot.c_blue));
+
+                        int c_red = bot.c_red % 256;
+                        if (c_red < 0) c_red = 0;
+                        int c_green = bot.c_green % 256;
+                        if (c_green < 0) c_green = 0;
+                        int c_blue = bot.c_blue % 256;
+                        if (c_blue < 0) c_blue = 0;
+
+                        colorLabel.setForeground(new Color(c_red, c_green, c_blue));
+
+                        colorLabel.setText(" Color: " + bot.c_red + ", " + bot.c_green + ", " + bot.c_blue + " ");
                         printCommands(bot);
+                        // dnaLabel.setText(makeString(bot.mind, "DNA: "));
+                        String mem_text = makeString(bot.memory, "Bot memory: ");
+                        mem_text += "; Health: " + bot.health + "; Mineral: " + bot.mineral + "; Age: " + bot.age + ";";
+                        memoryLabel.setText(mem_text);
                         last_cursor_bot = bot;
                     }
                 } catch (ArrayIndexOutOfBoundsException ee) {
@@ -237,8 +313,40 @@ public class World extends JFrame {
             coordsLabel.setText(s);
         }
 
-        public void printCommands(Bot bot) {
-            SimpleStack<CommandResult> last_actions = (SimpleStack<CommandResult>) bot.last_actions.clone();
+        private Pair<Integer, Integer> getOrigCoords(MouseEvent e) {
+            Pair<Integer, Integer> scaleHint = getScaleHint(
+                width, height, paintPanel.getWidth(), paintPanel.getHeight()
+            );
+
+            int origWidth = (int) (e.getX() * (width / (double) scaleHint.v1 ));
+            int origHeight = (int) (e.getY() * (height / (double) scaleHint.v2 ));
+
+            return new Pair<>(origWidth, origHeight);
+        }
+
+        private String makeString(byte[] data, String prefix) {
+            StringBuilder stringBuilder = new StringBuilder();
+
+            stringBuilder.append(prefix);
+            for (int i = 0; i < data.length - 1; i++) {
+                String mem_block = String.valueOf(data[i]);
+                if (data[i] < 10) {
+                    mem_block = "0" + mem_block;
+                }
+                stringBuilder.append(mem_block);
+                stringBuilder.append("\t");
+            }
+
+            if (data[data.length - 1] < 10) {
+                stringBuilder.append("0");
+            }
+            stringBuilder.append(data[data.length - 1]);
+
+            return stringBuilder.toString();
+        }
+
+        private void printCommands(Bot bot) {
+            SimpleStack<CommandResult> last_actions = bot.last_actions.makeCopy();
             commandsListModel.clear();
 
             for (CommandResult command_result : last_actions) {
@@ -257,6 +365,15 @@ public class World extends JFrame {
                         command_code = "MEM_WRITE";
                         break;
 
+                    case 11:
+                    case 13:
+                        command_code = "MEM_SET";
+                        break;
+
+                    case 14:
+                        command_code = "JUMP";
+                        break;
+
                     case 8:
                     case 3:  // увеличение ячейки памяти на 1
                         command_code = "MEM_INCR";
@@ -271,15 +388,51 @@ public class World extends JFrame {
                     case 5:  // условный переход на основе памяти
                         command_code = "MEM_IF";
                         break;
+
+                    case 53:
+                    case 54:
+                    case 55:
+                    case 15:
                     case 16:  // размножение делением
                         command_code = "DOUBLE";
                         break;
+
+                    case 19:
+                    case 20:
+                    case 56:
+                    case 57:
+                    case 58:
+                    case 18:  // скрещивание
+                        command_code = "CONV";
+                        break;
+
+                    case 21: // "поговорить"
+                        command_code = "SAY";
+                        break;
+
                     case 23:  // повернуть с параметром
                         command_code = "ROT";
                         break;
                     case 26:  // шаг с параметром
                         command_code = "MOVE";  // 2-пусто 3-стена 4-органика 5-бот 6-родня
                         break;
+
+                    case 27:
+                        command_code = "FIND_BOT";
+                        break;
+                    case 28:
+                        command_code = "FIND_EMPTY";
+                        break;
+                    case 29:
+                        command_code = "FIND_ORGANIC";
+                        break;
+                    case 30:
+                        command_code = "FIND_RELATIVE";
+                        break;
+                    case 31:
+                        command_code = "FIND_FOREIGN";
+                        break;
+
                     case 32:  // фотосинтез
                         command_code = "PHOTO";
                         break;
@@ -340,7 +493,12 @@ public class World extends JFrame {
                     result = " => " + command_result.result + ";";
                 }
 
-                commandsListModel.addElement(command_result.command + " " + command_code + arguments + result);
+                String command = String.valueOf(command_result.command);
+                if (command_result.command < 10) {
+                    command = "0" + command;
+                }
+
+                commandsListModel.addElement(command + " " + command_code + arguments + result);
             }
         }
     }
@@ -361,6 +519,7 @@ public class World extends JFrame {
                 graphicsThread = new GraphicsWorker();
                 graphicsThread.start();
                 startButton.setEnabled(true);
+                reStartButton.setEnabled(true);
             }
         }
 
@@ -413,6 +572,15 @@ public class World extends JFrame {
             adamGenerated = false;
         }
     }
+
+    class changeViewTypeAction implements ActionListener {
+        public void actionPerformed(ActionEvent e) {
+            if (!running) {
+                paint1();
+            }
+        }
+    }
+
     class startButtonAction implements ActionListener {
         public void actionPerformed(ActionEvent e) {
         	if(adamGenerated && thread==null && zeroBot.next != null) {
@@ -430,6 +598,28 @@ public class World extends JFrame {
                 sealevelSlider.setEnabled(true);
                 mapButton.setEnabled(true);
         	}
+        }
+    }
+
+    class reStartButtonAction implements ActionListener {
+        public void actionPerformed(ActionEvent e) {
+            running = false;
+            currenGraphicstbot = null;
+            adamGenerated = false;
+            zeroBot.next = zeroBot;
+            zeroBot.prev = zeroBot;
+
+            width = canvas.getWidth() / zoom;
+            height = canvas.getHeight() / zoom;
+            generation = 0;
+
+            matrix = new Bot[width][height];
+
+            startButton.setEnabled(false);
+            sealevelSlider.setEnabled(false);
+
+            paintMapView();
+            paint1();
         }
     }
 
@@ -465,8 +655,32 @@ public class World extends JFrame {
 
     }
 
+    public static BufferedImage scale(Image imageToScale, int dWidth, int dHeight) {
+        BufferedImage scaledImage = null;
+        if (imageToScale != null) {
+            scaledImage = new BufferedImage(dWidth, dHeight, BufferedImage.TYPE_INT_ARGB);
+            Graphics2D graphics2D = scaledImage.createGraphics();
+            graphics2D.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            graphics2D.drawImage(imageToScale, 0, 0, dWidth, dHeight, null);
+            graphics2D.dispose();
+        }
+        return scaledImage;
+    }
 
-//    @Override
+    public static Pair<Integer, Integer> getScaleHint(int width, int height, int targetWidth, int targetHeight) {
+        double originalRatio = (width / (double) height);
+        double targetRatio = (targetWidth / (double) targetHeight);
+
+        if (originalRatio > targetRatio) {
+            targetHeight = (int) (targetWidth / originalRatio);
+        } else {
+            targetWidth = (int) (targetHeight * originalRatio);
+        }
+
+        return new Pair<>(targetWidth, targetHeight);
+    }
+
+    //    @Override
     public void paint1() {
         Bot cb = currenGraphicstbot;
 
@@ -534,12 +748,28 @@ public class World extends JFrame {
 
         g.drawImage(image, 0, 0, null);
 
-        generationLabel.setText(" Generation: " + String.valueOf(generation));
-        populationLabel.setText(" Population: " + String.valueOf(population));
-        organicLabel.setText(" Organic: " + String.valueOf(organic));
+        generationLabel.setText(" Generation: " + generation);
+        populationLabel.setText(" Population: " + population);
+        organicLabel.setText(" Organic: " + organic);
+
+        int targetWidth = paintPanel.getWidth();
+        int targetHeight = paintPanel.getHeight();
+        Pair<Integer, Integer> scaleHint = getScaleHint(width, height, targetWidth, targetHeight);
+
+        buf = scale(buf, scaleHint.v1, scaleHint.v2);
 
         buffer = buf;
         canvas.repaint();
+
+//        // tried to fix the bug, when population does not want to start
+//        if (population == 0) {
+//            running = false;
+//            thread = null;
+//            perlinSlider.setEnabled(true);
+//            sealevelSlider.setEnabled(true);
+//            mapButton.setEnabled(true);
+//            adamGenerated = false;
+//        }
     }
 
 
@@ -564,7 +794,7 @@ public class World extends JFrame {
     class GraphicsWorker extends Thread {
         public void run() {
             while (running) {
-                paintMapView();
+                // paintMapView();
                 paint1();
             }
         }
